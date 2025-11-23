@@ -1,0 +1,163 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=matrix_user
+      - POSTGRES_PASSWORD=StrongPassword123!
+      - POSTGRES_DB=synapse_db
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix_user -d synapse_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - synapsenet
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - SYNAPSE_SERVER_NAME=matrix.localhost
+      - SYNAPSE_REPORT_STATS=no
+    volumes:
+      - ./synapse-data:/data
+    ports:
+      - "8010:8008"
+      - "8449:8448"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - synapsenet
+
+  mautrix-whatsapp:
+    image: dock.mau.dev/mautrix/whatsapp:latest
+    container_name: mautrix-whatsapp-new
+    depends_on:
+      synapse:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - BRIDGE_DATABASE_URI=postgres://matrix_user:StrongPassword123!@db:5432/mautrix_whatsapp?sslmode=disable
+      - HOMESERVER_ADDRESS=http://synapse:8008
+      - HOMESERVER_DOMAIN=matrix.localhost
+    volumes:
+      - ./mautrix-whatsapp-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:29318/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - synapsenet
+
+  mautrix-telegram:
+    image: dock.mau.dev/mautrix/telegram:latest
+    container_name: mautrix-telegram-new
+    depends_on:
+      db:
+        condition: service_healthy
+      synapse:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - HOMESERVER_ADDRESS=http://synapse:8008
+      - HOMESERVER_DOMAIN=matrix.localhost
+      - BRIDGE_DATABASE_URI=postgres://matrix_user:StrongPassword123!@db:5432/mautrix_telegram?sslmode=disable
+      - BRIDGE_USERNAME_TEMPLATE=telegram_{userid}
+      - BRIDGE_DISPLAYNAME_TEMPLATE={displayname} (Telegram)
+      - BRIDGE_PERMISSIONS=@.*:matrix.localhost:full,@telegrambot:matrix.localhost:admin,*:user
+      - BRIDGE_PUPPET_ALLOW_MATRIX_LOGIN=true
+      - BRIDGE_ALLOW_MATRIX_LOGIN=true
+      - TELEGRAM_API_ID=
+      - TELEGRAM_API_HASH=
+    volumes:
+      - ./mautrix-telegram-data:/data
+    networks:
+      - synapsenet
+
+  mautrix-twitter:
+    image: dock.mau.dev/mautrix/twitter:latest
+    container_name: mautrix-twitter
+    depends_on:
+      db:
+        condition: service_healthy
+      synapse:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - BRIDGE_DATABASE_URI=postgres://matrix_user:StrongPassword123!@db:5432/mautrix_x?sslmode=disable
+      - HOMESERVER_ADDRESS=http://synapse:8008
+      - HOMESERVER_DOMAIN=matrix.localhost
+    volumes:
+      - ./mautrix-twitter-data:/data
+    networks:
+      - synapsenet
+
+  mautrix-meta:
+    image: dock.mau.dev/mautrix/meta:latest
+    container_name: mautrix-meta
+    depends_on:
+      db:
+        condition: service_healthy
+      synapse:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - BRIDGE_DATABASE_URI=postgres://matrix_user:StrongPassword123!@db:5432/mautrix_instagram?sslmode=disable
+      - HOMESERVER_ADDRESS=http://synapse:8008
+      - HOMESERVER_DOMAIN=matrix.localhost
+    volumes:
+      - ./mautrix-meta-data:/data
+    networks:
+      - synapsenet
+
+  postmoogle:
+    image: ghcr.io/etkecc/postmoogle:latest
+    container_name: postmoogle
+    restart: unless-stopped
+    user: "1000:1000"  # Try with numeric UID/GID
+    depends_on:
+      db:
+        condition: service_healthy
+      synapse:
+        condition: service_healthy
+    volumes:
+      - ./postmoogle-data:/data
+    environment:
+      - POSTMOOGLE_DATABASE_URI=postgres://matrix_user:StrongPassword123!@db:5432/mautrix_postmoogle?sslmode=disable
+      - POSTMOOGLE_HOMESERVER=http://synapse:8008
+      - POSTMOOGLE_DOMAIN=matrix.localhost
+      - POSTMOOGLE_PICKLE_KEY=bwhdVmW6xF7teUvTNSurf5qy14EX0QIlso8aMCn2jPOGKZ3zLg9RHAicJDkBpY
+      - POSTMOOGLE_LOG_LEVEL=debug
+      - POSTMOOGLE_SMTP_HOST=0.0.0.0
+      - POSTMOOGLE_SMTP_PORT=25
+    ports:
+      - "29318:29318"
+      - "25:25"
+      - "587:587"
+      - "465:465"
+    networks:
+      - synapsenet
+
+networks:
+  synapsenet:
+    driver: bridge
